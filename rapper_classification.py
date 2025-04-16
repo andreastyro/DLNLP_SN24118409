@@ -1,8 +1,9 @@
 import os
 import pandas as pd
 import torch
+import pickle
 from datasets import Dataset
-from transformers import BertTokenizerFast, BertForSequenceClassification, DistilBertConfig
+from transformers import BertTokenizerFast, BertForSequenceClassification, GPT2Tokenizer, GPT2LMHeadModel
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import accuracy_score, f1_score
 from torch.utils.data import DataLoader
@@ -46,7 +47,7 @@ train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=8, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=8, shuffle=True)
 
-num_labels = label_encoder.classes_.size
+num_labels = len(label_encoder.classes_)
 
 model = BertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=num_labels)
 
@@ -121,13 +122,42 @@ for epoch in range(epochs):
             correct += (predictions == labels).sum().item()
             total += labels.size(0)
 
-    val_accuarcy = correct / total
+    val_accuracy = correct / total
     avg_loss = val_loss / len(val_loader)
     val_losses.append(avg_loss)
-    val_accuracies.append(val_accuarcy)
+    val_accuracies.append(val_accuracy)
 
-    print(f"[{epoch+1}/{epochs}, Validation Loss: {avg_loss}, Validation Accuracy: {val_accuarcy}")
+    print(f"[{epoch+1}/{epochs}, Validation Loss: {avg_loss}, Validation Accuracy: {val_accuracy}")
+
+correct = 0
+test_loss = 0 
+total = 0 
+
+with torch.no_grad():
+    for batch in tqdm(test_loader, desc=f"Testing"):
+            
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            labels = batch["label"].to(device)
+
+            y_pred = model(input_ids=input_ids, attention_mask=attention_mask)
+            logits = y_pred.logits
+
+            loss = criterion(logits, labels)
+
+            test_loss += loss
+            predictions = torch.argmax(logits, dim=1)
+            correct += (predictions == labels).sum().item()
+            total += labels.size(0)    
+
+test_accuracy = correct / total
+avg_loss = test_loss / len(test_loader)
+
+print(f"Testing Loss: {avg_loss}, Testing Accuracy: {test_accuracy}")
 
 model_dir = os.path.join(root_dir, "rapper_classification_model")
 model.save_pretrained(model_dir)
 tokenizer.save_pretrained(model_dir)
+
+with open(os.path.join(model_dir, "label_encoder.pkl"), "wb") as f:
+    pickle.dump(label_encoder, f)
