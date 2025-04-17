@@ -86,6 +86,8 @@ for epoch in range(epochs):
 
         y_pred = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
 
+        # Dont forget exploding gradients
+
         loss = y_pred.loss
         loss.backward()
         optimizer.step()
@@ -111,7 +113,7 @@ for epoch in range(epochs):
 
         print(f"Epoch {epoch+1} Validation Loss: {avg_val_loss:.4f}")
 
-with torch.no_grad:
+with torch.no_grad():
     for batch in tqdm(test_loader, desc="Testing"):
 
         input_ids = batch["input_ids"].to(device)
