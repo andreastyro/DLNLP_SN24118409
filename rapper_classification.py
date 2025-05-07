@@ -57,7 +57,7 @@ model.to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=2e-5)
 criterion = torch.nn.CrossEntropyLoss()
 
-epochs = 25
+epochs = 5
 
 train_losses = []
 train_accuracies = []
