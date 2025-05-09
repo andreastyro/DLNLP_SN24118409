@@ -7,7 +7,7 @@ root_dir = os.path.dirname(os.path.abspath(__file__))
 save_dir = os.path.join(root_dir, "Datasets")
 os.makedirs(save_dir, exist_ok=True)
 
-dataset = os.path.join(root_dir, "dataset_clean.csv")
+dataset = os.path.join(root_dir, "rapper_lyrics_dataset.csv")
 
 # Load the cleaned dataset
 df = pd.read_csv(dataset)
@@ -29,6 +29,6 @@ for rapper in df["rapper"].unique():
 # Now split the remaining 30% temp set into val and test (50/50)
 val_df, test_df = train_test_split(temp_df, test_size=0.5, random_state=42, shuffle=True)
 
-train_df.to_csv(os.path.join(save_dir, "rapper_train.csv"), index=False)
-val_df.to_csv(os.path.join(save_dir, "rapper_val.csv"), index=False)
-test_df.to_csv(os.path.join(save_dir, "rapper_test.csv"), index=False)
+train_df.to_csv(os.path.join(save_dir, "lyrics_train.csv"), index=False)
+val_df.to_csv(os.path.join(save_dir, "lyrics_val.csv"), index=False)
+test_df.to_csv(os.path.join(save_dir, "lyrics_test.csv"), index=False)
