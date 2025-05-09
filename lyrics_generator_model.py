@@ -1,84 +1,43 @@
-import torch
-
 import os
-import nltk
-import random
-from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
+from tqdm import tqdm
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
-nltk.download("punkt_tab", quiet=True)
-from nltk.tokenize import word_tokenize
 
-# === Setup ===
-model_path = "lyrics_generator_model"  # your pre-trained model dir
+root_dir = os.path.dirname(os.path.abspath(__file__))
+model_path = os.path.join(root_dir, "lyrics_generator_model")
+
+max_new_tokens = 100
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+llm = AutoModelForCausalLM.from_pretrained(model_path).to(device)
 tokenizer = AutoTokenizer.from_pretrained(model_path)
+tokenizer.padding_side = "left"  # Important for decoder-only models
 tokenizer.pad_token = tokenizer.eos_token
 
-model = AutoModelForCausalLM.from_pretrained(model_path).to(device)
-ref_model = AutoModelForCausalLM.from_pretrained(model_path).to(device)
-ref_model.eval()
+prompt = "<RAPPER>: Eminem\n<LYRICS>:"
+inputs = tokenizer(prompt, return_tensors="pt", padding=True)
+input_ids = inputs["input_ids"].to(device)
+attention_mask = inputs["attention_mask"].to(device)
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
+K = 20
+outputs = llm.generate(
+    input_ids=input_ids,
+    attention_mask=attention_mask,
+    max_new_tokens=max_new_tokens,
+    num_return_sequences=K,
+    do_sample=True,
+    temperature=0.9,
+    top_k=50,
+    pad_token_id=tokenizer.eos_token_id,
+    eos_token_id=tokenizer.eos_token_id
+)
 
-# === Simple prompts ===
-rappers = ["Drake", "Eminem", "Jay-Z", "Kanye West"]
-prompts = [f"<RAPPER>: {r}\n<LYRICS>:" for r in rappers]
+decoded_outputs = [
+    tokenizer.decode(output, skip_special_tokens=True).replace("<|endoftext|>", "").strip()
+    for output in outputs
+]
 
-def reward_fn(text):
-    tokens = word_tokenize(text.lower())
-    bigrams = list(nltk.bigrams(tokens))
-    unique_bigrams = set(bigrams)
-    if len(bigrams) == 0:
-        return 0.0
-    return len(unique_bigrams) / len(bigrams)  # diversity score between 0 and 1
-
-# === Simple reward: bigram diversity ===
-def ppo_step(prompt):
-    # Tokenize the input prompt
-    inputs = tokenizer(prompt, return_tensors="pt", padding=True).to(device)
-
-    # Generate response from both models
-    with torch.no_grad():
-        ref_output = ref_model.generate(**inputs, max_new_tokens=50, do_sample=True, pad_token_id=tokenizer.eos_token_id)
-    output = model.generate(**inputs, max_new_tokens=50, do_sample=True, pad_token_id=tokenizer.eos_token_id)
-
-    # Decode response and compute reward
-    response = tokenizer.decode(output[0], skip_special_tokens=True)
-    reward = reward_fn(response)
-
-    # Re-tokenize the generated response
-    response_inputs = tokenizer(response, return_tensors="pt", padding=True).to(device)
-    labels = response_inputs["input_ids"]
-
-    # Compute log probs / losses from both models
-    log_probs = model(**response_inputs, labels=labels).loss
-    ref_log_probs = ref_model(**response_inputs, labels=labels).loss
-
-    # Compute KL and final loss
-    kl = log_probs - ref_log_probs
-    loss = -reward + kl
-
-    # Backprop
-    loss.backward()
-    optimizer.step()
-    optimizer.zero_grad()
-
-    return prompt, response, reward
-
-# === Training loop ===
-print("Training with PPO (manual, minimal)...")
-for step in range(100):
-    prompt = random.choice(prompts)
-    prompt, response, reward = ppo_step(prompt)
-
-    if step % 10 == 0:
-        print(f"\nStep {step} — Reward: {reward:.4f}")
-        print(f"Prompt: {prompt}")
-        print(f"Response: {response}")
-
-# === Save model ===
-save_path = "lyrics_generator_model_ppo_simple"
-model.save_pretrained(save_path)
-tokenizer.save_pretrained(save_path)
-print(f"\n Saved model to {save_path}")
+# Print generations
+for i, text in enumerate(decoded_outputs):
+    print(f"\n Option {i+1}:\n{text}\n")
