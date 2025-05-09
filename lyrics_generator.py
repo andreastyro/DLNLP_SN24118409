@@ -9,20 +9,7 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import accuracy_score, f1_score
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from sentence_transformers import SentenceTransformer, util
-import nltk; nltk.download('punkt', quiet=True)
-
-embed_model = SentenceTransformer("all-MiniLM-L6-v2")   # fast 384-d encoder
-
-def distinct_n(corpus, n):
-    total, uniq = 0, set()
-    for text in corpus:
-        tok = nltk.word_tokenize(text.lower())
-        for i in range(len(tok) - n + 1):
-            total += 1
-            uniq.add(tuple(tok[i : i + n]))
-    return len(uniq) / max(total, 1)
-
+import matplotlib.pyplot as plt
 
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
 tokenizer.pad_token = tokenizer.eos_token
@@ -45,7 +32,7 @@ test_df = pd.read_csv(os.path.join(save_dir, "lyrics_test.csv"))
 
 # Combine rapper name and lyrics into a single prompt-style string
 def format_prompt(row):
-    return f"<RAPPER>: {row['rapper']}\n<LYRICS>: {row['lyric']}"
+    return f"<RAPPER>: {row['rapper']}\n<LYRICS>: {row['lyrics']}"
 
 train_df["text"] = train_df.apply(format_prompt, axis=1)
 val_df["text"] = val_df.apply(format_prompt, axis=1)
@@ -80,16 +67,11 @@ criterion = torch.nn.CrossEntropyLoss()
 epochs = 3
 
 train_losses = []
-train_accuracies = []
+train_ppls = []
 val_losses = []
-val_accuracies = []
-
-generations = []
-references = []
+val_ppls = []
 
 test_loss = 0
-
-
 
 for epoch in range(epochs):
     
@@ -117,7 +99,11 @@ for epoch in range(epochs):
         train_loss += loss.item()
 
     avg_train_loss = train_loss / len(train_loader)
-    print(f"Epoch {epoch+1} Training Loss: {avg_train_loss:.4f} "f"| PPL: {math.exp(avg_train_loss):.2f}")
+    train_ppl = math.exp(avg_train_loss)
+
+    train_losses.append(avg_train_loss)
+    train_ppls.append(train_ppl)
+    print(f"Epoch {epoch+1} Training Loss: {avg_train_loss:.4f} | PPL: {train_ppl:.2f}")
 
     with torch.no_grad():
         for batch in tqdm(val_loader, desc=f"Validation Epoch{epoch+1}"):
@@ -128,38 +114,15 @@ for epoch in range(epochs):
 
             y_pred = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
 
-
             loss = y_pred.loss
             val_loss += loss.item()
         
-            gen_data = model.generate(input_ids=input_ids,
-                            attention_mask=attention_mask,
-                            max_new_tokens=100,
-                            pad_token_id=tokenizer.pad_token_id,
-                            eos_token_id=tokenizer.eos_token_id
-                        ) 
-            
-            for ref, gen in zip(labels, gen_data):
-                references.append(tokenizer.decode(ref,  skip_special_tokens=True))
-                generations.append(tokenizer.decode(gen, skip_special_tokens=True))
-
-
         avg_val_loss = val_loss / len(val_loader)
-        val_ppl      = math.exp(avg_val_loss)
+        val_ppl = math.exp(avg_val_loss)
 
-        # embedding-similarity (cosine of paired lines)
-        emb_gen = embed_model.encode(generations, convert_to_tensor=True)
-        emb_ref = embed_model.encode(references,  convert_to_tensor=True)
-        emb_sim = util.cos_sim(emb_gen, emb_ref).diagonal().mean().item()
-
-        # lexical diversity
-        d1 = distinct_n(generations, 1)
-        d2 = distinct_n(generations, 2)
-
-        print(f"Epoch {epoch+1} Validation Loss: {avg_val_loss:.4f} "
-              f"| PPL: {val_ppl:.2f} | Emb-Sim: {emb_sim:.3f} "
-              f"| Dist-1: {d1:.3f} | Dist-2: {d2:.3f}")
-
+        val_losses.append(avg_val_loss)
+        val_ppls.append(val_ppl)
+        print(f"Epoch {epoch+1} Validation Loss: {avg_val_loss:.4f} | PPL: {val_ppl:.2f}")
 
 with torch.no_grad():
     for batch in tqdm(test_loader, desc="Testing"):
@@ -173,18 +136,41 @@ with torch.no_grad():
         loss = y_pred.loss
         test_loss += loss.item()
     
-        gen_ids = model.generate(input_ids=input_ids,
-                                attention_mask=attention_mask,
-                                max_new_tokens=40,
-                                do_sample=True, top_p=0.95, temperature=0.9)
-        generations += [tokenizer.decode(g, skip_special_tokens=True)
-                        for g in gen_ids]
-
     avg_test_loss = test_loss / len(test_loader)
+    test_ppl = math.exp(avg_test_loss) 
+    print(f"Testing Loss: {avg_test_loss:.4f} | PPL: {test_ppl:.2f}")
 
-print(f"Testing Loss: {avg_test_loss:.4f} | PPL: {math.exp(avg_test_loss):.2f} "
-      f"| Dist-1: {distinct_n(generations,1):.3f} "
-      f"| Dist-2: {distinct_n(generations,2):.3f}")
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+# Loss subplot
+axes[0].plot(range(1, epochs + 1), train_losses, label="Train Loss")
+axes[0].plot(range(1, epochs + 1), val_losses,   label="Val Loss")
+axes[0].set_xlabel("Epoch")
+axes[0].set_ylabel("Cross‑Entropy Loss")
+axes[0].set_title("Training vs Validation Loss")
+axes[0].legend()
+
+# Perplexity subplot
+axes[1].plot(range(1, epochs + 1), train_ppls, label="Train PPL")
+axes[1].plot(range(1, epochs + 1), val_ppls,   label="Val PPL")
+axes[1].set_xlabel("Epoch")
+axes[1].set_ylabel("Perplexity")
+axes[1].set_title("Training vs Validation Perplexity")
+axes[1].legend()
+
+plt.tight_layout()
+
+# ---- Save plot to ./plots directory ---- #
+
+root_dir = os.path.dirname(os.path.abspath(__file__))
+plots_dir = os.path.join(root_dir, "plots")
+os.makedirs(plots_dir, exist_ok=True)
+
+fig_path = os.path.join(plots_dir, "Plots.png")
+plt.savefig(fig_path, dpi=300)
+plt.close(fig)
+print(f"Plots saved to: {fig_path}")
+
 # Save model
 save_path = os.path.join(root_dir, "lyrics_generator_model")
 model.save_pretrained(save_path)
